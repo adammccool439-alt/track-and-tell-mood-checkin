@@ -1,8 +1,19 @@
 import streamlit as st
 import pandas as pd
 import os
+import json
+import hashlib
 from datetime import datetime
 import matplotlib.pyplot as plt
+
+# --- Password hashing ---
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# --- Page setup ---
+st.set_page_config(page_title="Track & Tell: Feelings Edition", page_icon="😊", layout="centered")
+
+# --- Styling ---
 st.markdown("""
     <style>
         .main {
@@ -29,97 +40,132 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
-LOG_FILE = "mood_log.csv"
 
-# Create CSV if it doesn't exist
-if not os.path.exists(LOG_FILE):
-    df = pd.DataFrame(columns=["Date", "Mood", "Note"])
-    df.to_csv(LOG_FILE, index=False)
+# --- User file setup ---
+USER_FILE = "users.json"
+if not os.path.exists(USER_FILE):
+    with open(USER_FILE, "w") as f:
+        json.dump({}, f)
 
-# Page setup
-st.set_page_config(page_title="Track & Tell: Feelings Edition", page_icon="😊", layout="centered")
-tab1, tab2, tab3, tab4 = st.tabs(["🌈 Mood Check-In", "📊 Mood Chart", "🖨️ Emoji Chart", "📘 About"])
-# Tabs
+# --- Tabs ---
+signup_tab, login_tab, tab1, tab2, tab3, tab4 = st.tabs([
+    "🆕 Sign Up", "🔐 Login", "🌈 Mood Check-In", "📊 Mood Chart", "🖨️ Emoji Chart", "📘 About"
+])
 
+# --- Sign Up ---
+with signup_tab:
+    st.title("Create an Account")
+    new_name = st.text_input("Your name")
+    new_username = st.text_input("Choose a username")
+    new_password = st.text_input("Choose a password", type="password")
 
+    if st.button("Sign Up"):
+        with open(USER_FILE, "r") as f:
+            users = json.load(f)
 
-   # 🌈 Mood Check-In
+        if new_username in users:
+            st.error("Username already exists. Try another.")
+        elif new_name and new_username and new_password:
+            hashed_pw = hash_password(new_password)
+            users[new_username] = {"name": new_name, "password": hashed_pw}
+            with open(USER_FILE, "w") as f:
+                json.dump(users, f)
+            st.success("Account created! You can now log in.")
+        else:
+            st.warning("Please fill out all fields.")
+
+# --- Login ---
+with login_tab:
+    st.title("Login")
+    login_username = st.text_input("Username", key="login_user")
+    login_password = st.text_input("Password", type="password", key="login_pass")
+
+    if st.button("Log In"):
+        with open(USER_FILE, "r") as f:
+            users = json.load(f)
+
+        if login_username in users:
+            stored_pw = users[login_username]["password"]
+            if hash_password(login_password) == stored_pw:
+                st.session_state["logged_in"] = True
+                st.session_state["username"] = login_username
+                st.session_state["name"] = users[login_username]["name"]
+                st.success(f"Welcome back, {users[login_username]['name']}!")
+            else:
+                st.error("Incorrect password.")
+        else:
+            st.error("Username not found.")
+
+# --- Private CSV per user ---
+if st.session_state.get("logged_in"):
+    username = st.session_state["username"]
+    LOG_FILE = f"{username}_mood_log.csv"
+    if not os.path.exists(LOG_FILE):
+        df = pd.DataFrame(columns=["Date", "Child", "Mood", "Note"])
+        df.to_csv(LOG_FILE, index=False)
+
+# --- 🌈 Mood Check-In ---
 with tab1:
-    st.title("Track & Tell: Feelings Edition")
-    child = st.selectbox("Who's checking in?", ["Child A", "Child B", "Child C"])
-    st.write("Helping kids build emotional awareness through daily check-ins.")
-    
-    mood = st.radio("How are you feeling today?", ["😄 Happy", "😊 Calm", "😐 Okay", "😢 Sad", "😠 Angry", "😴 Tired", "🤩 Excited"])
-    note = st.text_input("Want to tell us more?", "")
-    
-    
-    if st.button("Log Mood"):
-        today = datetime.now().strftime("%Y-%m-%d")
-        existing = pd.read_csv(LOG_FILE)
-        new_entry = pd.DataFrame([[today, child, mood, note]], columns=["Date", "Child", "Mood", "Note"])
-        updated = pd.concat([existing, new_entry], ignore_index=True)
-        updated.to_csv(LOG_FILE, index=False)
-        st.success(f"Mood logged for {today}!")
-    
-    st.subheader("Recent Mood Entries")
-    log_df = pd.read_csv(LOG_FILE)
-    st.dataframe(log_df.tail(5))
+    if st.session_state.get("logged_in"):
+        st.title("Track & Tell: Feelings Edition")
+        st.success(f"Welcome {st.session_state['name']}!")
 
-    st.download_button(
-        label="📤 Download Full Mood Log",
-        data=log_df.to_csv(index=False),
-        file_name="mood_log.csv",
-        mime="text/csv"
-    )
+        # 🔓 Log Out button
+        if st.button("Log Out"):
+            st.session_state.clear()
+            st.experimental_rerun()
 
-    
-# 📊 Mood Chart
+        child = st.selectbox("Who's checking in?", ["Child A", "Child B", "Child C"])
+        mood = st.radio("How are they feeling?", ["😊 Happy", "😢 Sad", "😠 Angry", "😴 Tired", "😕 Confused"])
+        note = st.text_area("Optional note")
+
+        if st.button("Submit Mood"):
+            new_entry = {
+                "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Child": child,
+                "Mood": mood,
+                "Note": note
+            }
+            df = pd.read_csv(LOG_FILE)
+            df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+            df.to_csv(LOG_FILE, index=False)
+            st.success("Mood check-in saved!")
+
+# --- 📊 Mood Chart ---
 with tab2:
-    st.title("Mood Chart")
-    log_df = pd.read_csv(LOG_FILE)
-    if not log_df.empty:
-        mood_counts = log_df["Mood"].value_counts()
-        fig, ax = plt.subplots()
-        mood_counts.plot(kind="bar", color="#A7C7E7", ax=ax)
-        ax.set_title("Mood Frequency")
-        ax.set_ylabel("Count")
-        st.pyplot(fig)
+    if st.session_state.get("logged_in"):
+        st.title("📊 Mood Chart")
+        st.info("Mood visualizations will appear here once you’ve submitted a few check-ins.")
     else:
-        st.info("No mood data yet. Log a mood to see the chart!")
+        st.warning("Please log in to view your mood chart.")
 
-# 🖨️ Emoji Chart
+# --- 🖨️ Emoji Chart ---
 with tab3:
-    st.title("Printable Emoji Chart")
-    st.write("Use this chart for kids to color or circle how they feel.")
+    st.title("🖨️ Printable Emoji Chart")
+    st.markdown("""
+    This chart helps kids express how they feel using emojis.  
+    You can print it out and hang it in your classroom or home!
 
-    emojis = ["😄 Happy", "😊 Calm", "😐 Okay", "😢 Sad", "😠 Angry", "😴 Tired", "🤩 Excited"]
-    for emoji in emojis:
-        st.markdown(f"<div style='font-size:40px;'>{emoji}</div>", unsafe_allow_html=True)
-
-    st.write("Tip: Press Command+P to print this page or save as PDF.")
-st.markdown("[Download a printable emoji chart](https://fromunderapalmtree.com/printable-emoji-feelings-chart-for-kids/)")   
-
-# 📘 About
-with tab4:
-    st.title("About This App")
-    st.write("""
-    **Track & Tell: Feelings Edition** was created to help children build emotional awareness in a simple, visual, and supportive way.
-
-    Whether you're a teacher guiding a classroom or a parent checking in at home, this tool offers a gentle daily prompt: *“How are you feeling today?”*
-
-    Kids can point to an emoji, color a printable chart, or select their mood digitally — giving grown-ups a quick pulse on how they’re doing emotionally.
-
-    Over time, this helps children:
-    - 🧠 Build emotional vocabulary
-    - 💬 Express feelings with confidence  
-    - 🧒 Develop self-awareness and empathy
-
-    This app is:
-    - 🎨 Calm and friendly in design
-    - 🖨️ Printable for offline use
-    - 📊 Trackable for spotting patterns
-    - 🧩 Easy to integrate into homeschool, classroom, or family routines
-
-    Because emotional wellness is just as important as physical health — and every child deserves tools to feel seen, heard, and supported.
+    | Emoji | Feeling   | Description         |
+    |-------|-----------|---------------------|
+    | 😊    | Happy     | Feeling good, smiling inside |
+    | 😢    | Sad       | Feeling down or upset |
+    | 😠    | Angry     | Feeling mad or frustrated |
+    | 😴    | Tired     | Low energy, needs rest |
+    | 😕    | Confused  | Unsure or overwhelmed |
     """)
 
+# --- 📘 About ---
+with tab4:
+    st.title("📘 About Track & Tell")
+    st.markdown("""
+    **Track & Tell: Feelings Edition** is a wellness tool designed for families, educators, and kids.  
+    It helps children build emotional awareness through daily mood check-ins.
+
+    - ✅ Private, per-user mood logs  
+    - ✅ Emoji-based check-ins for accessibility  
+    - ✅ Printable resources for classrooms and homes  
+    - ✅ Built with privacy-first design
+
+    Created by Adam McCool, founder of Track & Tell Wellness Studio.
+    """)
